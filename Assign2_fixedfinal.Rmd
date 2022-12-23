@@ -1,0 +1,420 @@
+---
+title: "Forecasting Canadian Elections, an attemp utilizing post-stratification"
+author: "Group 68: Yinzhou Liu, Junke Hou, Chuxin Chen"
+date: November 27, 2022
+subtitle: STA304 - Assignment 2
+output:
+  pdf_document: default
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+library(openintro)
+library(hrbrthemes)
+library(dplyr)
+library(viridis)
+library(tidyverse)
+library(knitr)
+library(ggplot2)
+library(lme4)
+library(kableExtra)
+```
+
+
+
+## Introduction
+
+Following the increase of democratic countries in the last century, elections have become ever so important. Election results could decide the outcome of a nation, or even influence the political environment of the world. Naturally, forecasting such events would be a hot topic of interest.\
+
+A common method of forecasting still used today is polling, but forecasting by simple polling had its flaws. In the past, polls are carried out by mail or by contacting individuals via phone book or car registration list(Lusinchi, 2012). While this method, a form of convenience sampling, has the potential to reach a lot of respondents, the data collected are often not very representative of the overall voting population. By only using the sample data to forecast, we would arrive at very biased and incorrect results.\
+
+While simple sampling with no considerations for representation is flawed, statisticians have found ways of correcting such mistakes. Methods such as multilevel regression and post-stratification that could solve the “unrepresentative” problem of polling can be utilized. For this paper we will be applying such methods on Canadian election data. While elections in Canada are required to take place every 5 years, because of how the Canadian political system works, the prime minister can call an election any time. Such uncertainty makes forecasting the outcome of Canadian elections more important. \
+
+Canada has a unique political voting system, instead of voting for a candidate, citizens votes for a candidate in their ridings(Canadian electoral district), and the candidate with the most votes becomes a member of parliament. Then within the parliament, the party with the most seats will win the final election(Schwartz, 2021). Our research question is to forecast the Canadian election by predicting the popular vote percentage a Canadian political party receives using survey data.\
+
+Due to the complexity, we will be working with the popular vote percentage instead, while historically there are occasions where the party with higher votes received fewer seats in the parliament thus losing elections, popular vote percentage is still a very important indicator of how well a party performs during the election. The problem of this survey is the responses are not representative of the entire Canadian voting population as displayed through various graphs in later sections.\
+
+This paper uses survey data during the 2019 campaign phase to “forecast” future elections. Hypothetically, this means our forecasted result should correspond to the actual outcome of the 2019 election. If our hypothesis is correct, that means our method and models have the
+potential to forecast future elections. By changing the data used, we can also extend our models to forecast other elections.\
+
+
+
+## Data
+
+We are using two data sets, “GSS” or general social survey, representative of the Canadian voting population and GES2019, or Canadian Election Study.\
+
+GSS2017 serves as a census data, representative of the overall population. GSS targets Canadian population 15 years of age and older, the respondents are also screened in based on representative criteria. Provinces and CMAs(Census metropolitan areas) are divided into stratas and the resulting survey is re-weighted by Statistics Canada, all to ensure that the survey is representative(Government of Canada, 2019).\
+
+GES 2019 is conducted during the 2019 election campaign period by phone, the respondents were asked basic demographic information such as age and gender, and also were asked a series of question regarding the election such as preferred party and opinions on matters such as being eco-friendly or on the matter of refugees(Stephenson et.al, 2022).\
+
+### Cleaning
+Upon importing our data sets, we clean our data set. For GSS 2017, The data cleaning process consists of three parts. First, we separate the age variable into five categories: less than 25, between 25 to 40, between 40 to 55, between 55 to 70, and over 70. Second,we use 1 to represent those who has religious affiliation, and 0 to represent those who does not have religious affiliation. Finally, we only keep our interested variable, that includes age, sex, province and whether one has religious affiliation, and drop all the NA values.\
+
+For GES 2019, the data cleaning process consists of several parts. First, We create a new variable indicating age using 2019 subtracting the year of birth in the survey data. Second, we create a new variable indicating whether one votes for liberal using q11 from survey data, and use 1 to represent those who would vote for liberal and 0 to represent those who does not, we repeat this process for all the other major Canadian political parties and create several new columns. Third, we rename the q2 column which stands for gender, replace 1 with male, 2 with female, and 3 with others, we simplified this column because inorder to perform post-stratification, the information has to correspond to our data in GSS2017. Then for q4 in the survey data, which represents the location of the respondent, replace each number with the province it represents accordingly. Afterwards, we create a new variable that indicates whether the respondent is religious or not, using the data of q62 in the survey data, and use 0 to represent those who are not religious and 1 to represent those who are. At last, we proceed to categorize our age variable similarly to what we did for our GSS 2017, we select our interested columns and drop all NA values.\
+
+Our main variables are the four demographic variables which we are going to perform post-stratification on, that includes age, sex, province that the respondent is in and whether they are religious. Our response variables or variables of interest are whether a respondent votes for a Canadian political party, contained only in GES 2019.\
+
+A summary table can be seen below.\
+*Note: We will be using census to indicate GSS2017 and survey to indicate GES 2019 for convenience.
+
+
+```{r, include = FALSE}
+
+# Here you can load in and clean the census data (you may need to do the cleaning in a separate R script). 
+
+census_data <- read_csv("gss_clean.csv")
+census_data_new <- census_data %>%
+  mutate(age = replace(age, age<=25, "0to25"),
+         age = replace(age, age>25 & age<=40, "25to40"),
+         age = replace(age, age>40 & age<=55, "40to55"),
+         age = replace(age, age>55 & age<=70, "55to70"),
+         age = replace(age, age>70, "over70"),
+         have_religion = if_else(religion_has_affiliation == "Has religious affiliation", 1, 0)) %>%
+  select(age, sex, province, have_religion) %>%
+  drop_na()
+
+# You may need additional chunks, in case you want to include some of the cleaning output.
+
+```
+
+```{r, include = FALSE}
+
+# Load survey data.
+survey_data <- read_csv("ces2019-phone_clean.csv")
+
+```
+
+
+```{r, include = FALSE}
+
+# Clean the survey data for post-stratification.
+survey_data_new <- survey_data %>% 
+  filter(q11 == 1 | q11 == 2 | q11 == 3 | q11 == 4 | q11 == 5 | q11 == 6 | 
+           q11 == 7 | q11 == 9) %>%
+  mutate(age = 2019-q2,
+         q11 = replace(q11, q11 == "1", "Liberal"),
+         q11 = replace(q11, q11 == "2", "Conservatives"),
+         q11 = replace(q11, q11 == "3", "NDP"),
+         q11 = replace(q11, q11 == "4", "Bloc Québécois"),
+         q11 = replace(q11, q11 == "5", "Green Party"), 
+         q11 = replace(q11, q11 == "6", "People's Party"),
+         q11 = replace(q11, q11 == "7" | q11 == "9" , "Others"),
+         vote_liberal = ifelse(q11 == "Liberal", 1, 0),
+         vote_conservatives = ifelse(q11 == "Conservatives", 1, 0),
+         vote_NDP = ifelse(q11 == "NDP", 1, 0),
+         vote_bloc_québécois = ifelse(q11 == "Bloc Québécois", 1, 0),
+         vote_green_party = ifelse(q11 == "Green Party", 1, 0),
+         vote_peoples_party = ifelse(q11 == "People's Party", 1, 0),
+         vote_others = ifelse(q11 == "Others", 1, 0),
+         votes = q11,
+         q3 = replace(q3, q3 == "1", "Male"),
+         q3 = replace(q3, q3 == "2", "Female"),
+         q3 = replace(q3, q3 == "3", "Other"),
+         sex = q3,
+         q4 = replace(q4, q4 == 1, "Newfoundland and Labrador"),
+         q4 = replace(q4, q4 == 2, "Prince Edward Island"),
+         q4 = replace(q4, q4 == 3, "Nova Scotia"),
+         q4 = replace(q4, q4 == 4, "New Brunswick"),
+         q4 = replace(q4, q4 == 5, "Quebec"),
+         q4 = replace(q4, q4 == 6, "Ontario"),
+         q4 = replace(q4, q4 == 7, "Manitoba"),
+         q4 = replace(q4, q4 == 8, "Saskatchewan"),
+         q4 = replace(q4, q4 == 9, "Alberta"),
+         q4 = replace(q4, q4 == 10, "British Columbia"),
+         q4 = replace(q4, q4 == 11, "Northwest Territories"),
+         q4 = replace(q4, q4 == 12, "Yukon"),
+         province = q4,
+         have_religion = ifelse(q62==21, 0, 1),
+         age = case_when(age<= 25 ~ "0to25",
+            age>25 & age<=40 ~ "25to40",
+            age>40 & age<=55 ~ "40to55",
+            age>55 & age<=70 ~ "55to70",
+            age>70 ~ "over70")) %>% 
+  select(age, sex, province, have_religion, votes, vote_liberal, 
+         vote_conservatives, vote_NDP, vote_bloc_québécois, vote_green_party,
+         vote_peoples_party, vote_others) %>%
+  drop_na()
+```
+
+### Visualizations
+```{r, echo = FALSE, fig.width = 16, fig.height = 8}
+
+# Use this to create some plots. Should probably describe both the sample and population.
+survey_data_group <- survey_data_new %>%
+  group_by(province, votes) %>%
+  summarise(number = n())
+ggplot(data = survey_data_group, aes(x = province, y = number, fill = votes)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Figure 1: Barplot of main parties vote per province participating in the survey", 
+       x="Province", y="Total count") 
+```
+
+Figure 1 is a barplot showing number of voters for different parties for each province, with x axis showing name of the province and y axis showing numbers of vote. The total number of voters are not same across different provinces. Provinces such as Ontario, Quebec, and British Columbia have significantly more voters than other provinces, due to their high population. Each province has different ratio of voting to different parties. For example, in Quebec voting for Bloc Québécois party is significantly higher than other province; in Alberta and Saskatchewan, most voters prefer conservative party; in Ontario, most voters prefer liberal party. Such difference indicates that we are likely to get a biased estimate if we assume every province has same preference of the political parties and model using only survey data.\
+\
+
+```{r, echo = FALSE, fig.width = 6, fig.height = 3.5}
+plot_data <- survey_data %>%
+  mutate(age = 2019-q2,
+         q11 = replace(q11, q11 == "1", "Liberal"),
+         q11 = replace(q11, q11 == "2", "Conservatives"),
+         q11 = replace(q11, q11 == "3", "NDP"),
+         q11 = replace(q11, q11 == "4", "Bloc Québécois"),
+         q11 = replace(q11, q11 == "5", "Green Party"), 
+         q11 = replace(q11, q11 == "6", "People's Party"),
+         q11 = replace(q11, q11 == "7" | q11=="8" | q11 == "9" |q11 == "10"|
+                         q11 == "-9"|q11 == "-8", "Other/Won't Vote"),
+         votes = q11) %>%
+  group_by(votes) %>%
+  select(age, votes) %>%
+  drop_na()
+
+plot_survey = plot_data['age']
+plot_survey['type'] = 'survey data'
+plot_cen = census_data['age']
+plot_cen['type']= 'census data'
+plot = rbind(plot_survey, plot_cen)
+p2 <- ggplot(data=plot, aes(x=age, group=type, fill=type)) + 
+  geom_density(adjust=1.5, alpha=.4) +
+  labs(title = "Figure 2: Density of age in GES2019 and GSS2017")
+p2
+```
+
+Figure 2 is a density plot(Holtz, n.d.) of age in census and survey data. The purpose of plotting this graph is to compare the distribution of age between census and survey data. The distribution of age below 30 is very similar in both data sets; for age between 30 and 55, the survey data has higher density; for age between 55 and 80, the census data has higher density. The plot shows that distribution of age is not same across census and survey data. This means if we are to only model using survey data, our results will be biased due to the difference in the distribution of age among the respondents and the public.\
+
+```{r, echo = FALSE, fig.width = 10, fig.height = 6}
+# Use this to create some plots. Should probably describe both the sample and population.
+ggplot(plot_data, aes(x = as.factor(votes), y = age, fill = votes)) + 
+  geom_boxplot() +
+  labs(title = "Figure 3: Boxplot of the age of support for each main party", 
+       x="Parties", y="Age") 
+```
+
+Figure 3 is a side-by-side boxplot comparing the age of people voting for different parties. The median of each group is mostly above 50, with a few exceptions: Green party, NDP, and people’s party. NDP has the lowest median and quartiles, possibly indicating that this party is preferred among younger generations. For liberal and conservation, their age medians are slightly higher than other parties, indicating those two parties are preferred among older generations. Provided with those differences, the plot shows that age could be a useful predictor of popular vote for different parties. These differences paired with the differences in density observed in Figure 2 all serves as motivations for post-stratification. \
+
+### Numerical Summary
+```{r, echo = FALSE}
+plot_data %>%
+  summarise(Count = length(age) , Mean = mean(age), 
+            Median = median(age), Variance = (sd(age))^2) %>%
+  kable(caption = "Summary of variable Age by Gender") %>%
+  kable_styling(latex_options = "HOLD_position")
+```
+Table 1 is a summary of our numerical variable age of respondents from the survey data.
+We see the average age of all voters is around 50, with a lot of variations between voters of each political party. For example, those who voted for NDP from our survey data has an average age of 43, almost a 10-year difference from those who voted for the Conservative party. This suggests that the distribution of age might be different for those who vote for different political parties and as such, could be used as a predictor when forecasting their voting preference.\
+
+
+## Methods
+
+We will first run a regression model on our GES2019 data, than perform a post-stratification by re-weighting the GES 2019 data to be representative of the overall population.
+Our regression model uses a logit regression, as our responding variables are binary and categorical. The results obtained from our regression model and after transformation, is the probability of a party getting voted. This corresponds with the percentage of votes they receive from the public. Linear model is not used as our outcome variable here is binary(whether a respondent votes for a party).
+
+### Model Specifics
+
+We will be creating 6 logistic regression models to model whether people will vote for 6 main parties or not. We used a method called AIC to evaluate the goodness of fit of the model to the data generated from it. In particular, we mainly compare three different types of models for each party. The results are presented in the table following, and the different model types are listed below the table.
+
+```{r, include=FALSE}
+
+# Creating the Model
+aic_1 <- AIC(glm(vote_liberal ~ age + sex + have_religion, data=survey_data_new, family = "binomial"))
+aic_2 <- AIC(glm(vote_liberal ~ age + have_religion, data=survey_data_new, family = "binomial"))
+aic_3 <- AIC(glm(vote_liberal ~ age + sex, data=survey_data_new, family = "binomial"))
+
+aic_4 <- AIC(glm(vote_conservatives ~ age + sex + have_religion, data=survey_data_new, family = "binomial"))
+aic_5 <- AIC(glm(vote_conservatives ~ age + have_religion, data=survey_data_new, family = "binomial"))
+aic_6 <- AIC(glm(vote_conservatives ~ age + sex, data=survey_data_new, family = "binomial"))
+
+aic_7 <- AIC(glm(vote_NDP ~ age + sex + have_religion, data=survey_data_new, family = "binomial"))
+aic_8 <- AIC(glm(vote_NDP ~ age + have_religion, data=survey_data_new, family = "binomial"))
+aic_9 <- AIC(glm(vote_NDP ~ age + sex, data=survey_data_new, family = "binomial"))
+
+aic_10 <- AIC(glm(vote_bloc_québécois ~ age + sex + have_religion, data=survey_data_new, family = "binomial"))
+aic_11 <- AIC(glm(vote_bloc_québécois ~ age + have_religion, data=survey_data_new, family = "binomial"))
+aic_12 <- AIC(glm(vote_bloc_québécois ~ age + sex, data=survey_data_new, family = "binomial"))
+
+aic_13 <- AIC(glm(vote_green_party ~ age + sex + have_religion, data=survey_data_new, family = "binomial"))
+aic_14 <- AIC(glm(vote_green_party ~ age + have_religion, data=survey_data_new, family = "binomial"))
+aic_15 <- AIC(glm(vote_green_party ~ age + sex, data=survey_data_new, family = "binomial"))
+
+aic_16 <- AIC(glm(vote_peoples_party ~ age + sex + have_religion, data=survey_data_new, family = "binomial"))
+aic_17 <- AIC(glm(vote_peoples_party ~ age + have_religion, data=survey_data_new, family = "binomial"))
+aic_18 <- AIC(glm(vote_peoples_party ~ age + sex, data=survey_data_new, family = "binomial"))
+
+```
+
+```{r, echo = FALSE}
+cells <- c(aic_1, aic_2, aic_3, aic_4, aic_5, aic_6, aic_7, aic_8, aic_9, aic_10, aic_11, aic_12, aic_13, aic_14, aic_15, aic_16, aic_17, aic_18)
+rname <- c("Liberal", "Conservatives", "NDP", "Bloc Québécois", "Green Party", "People's party")
+cname <- c("Model Type 1", "Model Type 2", "Model Type 3")
+mymatrix <- matrix(cells, nrow=6, ncol=3,byrow=TRUE, dimnames=list(rname, cname))
+cfootnote <- c("Type 1 = Including Age, Sex, Religion", "Type 2 = Including Age, Religion", "Type 3 = Including Age, Sex")
+matrix <- mymatrix %>%
+  kable(caption = "AIC Tabel For Model Selection") %>%
+  add_footnote(label = cfootnote, notation = "alphabet") %>%
+  kable_styling(latex_options = "HOLD_position")
+matrix
+```
+From the table, we can observe that the AIC of Model Type 1 is the smallest when predicting the voting rate of Conservatives and NDP. In addition, although the AIC of Model Type 1 is not the smallest among the other parties, it is similar to the AIC of the other two Model Types. Since the AIC of Model Type 1 includes one more variable, we conclude that Model Type 1 is the best choice for predicting the voting rate for each party.
+
+After deciding the model, we will be using age, gender, and whether they are religious as independent variables, which are recorded as categorical data. We will use these models to predict the probability of voting for 6 different main Canadian political parties. The logistic regression model we are using is:
+
+$$ y = \beta_0+\beta_1  x_{age} +\beta_2  x_{sex} +\beta_3  x_{religion} + \epsilon$$
+
+Where $y$ represents whether the individual will support a particular party or not, $\beta_0$ represents when all independent variables are 0, the output of logistic regression will be equal to $\beta_0$. In addition, $\beta_1$, $\beta_2$, $\beta_3$ are the coefficients of the three independent variables age gender and the presence or absence of religion, respectively.\
+
+*Since there are too many models used, we will put the summary of these models in the Appendix.
+
+## Post-Stratification 
+
+We will be using post-stratification to correct the representation problem present in our survey data. As observed in graph in the data section, many demographics aspects of the survey sample, not just age as we showed above, doesn’t match with our survey. So any results of models conducted solely on our survey data is biased and incorrect. \
+
+By performing post-stratification, we are taking each samples from our survey data, categorizing them by their demographics (age, sex and religion), and re-weighting them based on the distribution of their demographic data according to the census so they correctly represents the actual proportion for the entire Canadian population.\
+
+In Post-Stratification, we want to observe the voting rate of each main party in terms of province, so we choose "province" as our group variable, and then we group the census data by province and other independent variables to enumerate different cells in order to predict their $\hat{y_j}$.\
+
+Next, we use the survey data to create a logistic regression for each of the main party to predict the voting rate, then apply the model to Post-stratification data which is formed by census to obtain the regression output for each cell. After that, in order to derive the probabilities which is $\hat{y_j}$, we need to perform the following calculations on the outputs obtained from the logistic regression.
+$$ \hat{y_j} = \frac{exp(y)} {1+exp(y)} $$
+
+In the final step, we will use $\hat{y}^{PS} = \frac{\sum{N_j \hat{y_j}}}{\sum{N_j}}$ to infer how the entire population in each province will vote.
+
+## Results 
+
+```{r, include=FALSE}
+# Creating the Model
+logit_model1 <- glm(vote_liberal ~ age + sex + have_religion, data = survey_data_new, family = "binomial")
+logit_model2 <- glm(vote_conservatives ~ age + sex + have_religion, data = survey_data_new, family = "binomial")
+logit_model3 <- glm(vote_NDP ~ age + sex + have_religion, data = survey_data_new, family = "binomial")
+logit_model4 <- glm(vote_bloc_québécois ~ age + sex + have_religion, data = survey_data_new, family = "binomial")
+logit_model5 <- glm(vote_green_party ~ age + sex + have_religion, data = survey_data_new, family = "binomial")
+logit_model6 <- glm(vote_peoples_party ~ age + sex + have_religion, data = survey_data_new, family = "binomial")
+
+# Model Results (to Report in Results section)
+# summary(logit_model)
+```
+
+```{r, include=FALSE}
+
+# Here I will perform the post-stratification calculation
+census_data_group <- census_data_new %>%
+  group_by(province, age, sex, have_religion) %>%
+  summarise(number = n())
+
+```
+
+```{r, echo = FALSE}
+census_data_group$estimate1 <- logit_model1 %>%
+  predict(newdata = census_data_group)
+census_data_group <- census_data_group %>%
+  mutate(prob1 = exp(estimate1)/(1+exp(estimate1)),
+         predict_prop1 = prob1*number)
+
+census_data_group$estimate2 <- logit_model2 %>%
+  predict(newdata = census_data_group)
+census_data_group <- census_data_group %>%
+  mutate(prob2 = exp(estimate2)/(1+exp(estimate2)),
+         predict_prop2 = prob2*number)
+
+census_data_group$estimate3 <- logit_model3 %>%
+  predict(newdata = census_data_group)
+census_data_group <- census_data_group %>%
+  mutate(prob3 = exp(estimate3)/(1+exp(estimate3)),
+         predict_prop3 = prob3*number)
+
+census_data_group$estimate4 <- logit_model4 %>%
+  predict(newdata = census_data_group)
+census_data_group <- census_data_group %>%
+  mutate(prob4 = exp(estimate4)/(1+exp(estimate4)),
+         predict_prop4 = prob4*number)
+
+census_data_group$estimate5 <- logit_model5 %>%
+  predict(newdata = census_data_group)
+census_data_group <- census_data_group %>%
+  mutate(prob5 = exp(estimate5)/(1+exp(estimate5)),
+         predict_prop5 = prob5*number)
+
+census_data_group$estimate6 <- logit_model6 %>%
+  predict(newdata = census_data_group)
+census_data_group <- census_data_group %>%
+  mutate(prob6 = exp(estimate6)/(1+exp(estimate6)),
+         predict_prop6 = prob6*number)
+```
+
+```{r, echo = FALSE}
+# Post-Stratification Result 
+census_data_final <- census_data_group %>% 
+  group_by(province) %>%
+  summarise(Liberal = round(sum(predict_prop1)/sum(number), digits = 4),
+            Conservatives = round(sum(predict_prop2)/sum(number), digits = 4),
+            NDP = round(sum(predict_prop3)/sum(number),digits = 4),
+            Québécois = round(sum(predict_prop4)/sum(number), digits = 4),
+            Green = round(sum(predict_prop5)/sum(number), digits = 4),
+            Peoples = round(sum(predict_prop6)/sum(number), digits = 4))
+m1 <- mean(census_data_final$Liberal)
+m2 <- mean(census_data_final$Conservatives)
+m3 <- mean(census_data_final$NDP)
+m4 <- mean(census_data_final$Québécois)
+m5 <- mean(census_data_final$Green)
+m6 <- mean(census_data_final$Peoples)
+
+census_data_final <- census_data_final %>%
+  kable(caption = "Result of Post-Stratification") %>%
+  kable_styling(latex_options = "HOLD_position")
+census_data_final
+
+cells_m <- c(m1, m2, m3, m4, m5, m6)
+rname_m <- c("Mean")
+cname_m <- c("Liberal", "Conservatives", "NDP", "Québécois", "Green", "Peoples")
+mymatrix_m <- matrix(cells_m, nrow=1, ncol=6,byrow=TRUE, dimnames=list(rname_m, cname_m))
+mymatrix_m <- mymatrix_m %>%
+  kable(caption = "Mean of Post-Stratification") %>%
+  kable_styling(latex_options = "HOLD_position")
+mymatrix_m
+```
+
+We can observe the results of our forecast by province for each part in the above table.\
+
+Overall, we see roughly similar votes among the provinces for Liberal party, at around 34%. Votes for the Conservative party varies within provinces, ranging from 33.14% to 37.57%, slightly more votes compared to the Liberal party. For NDP, the results show a much smaller percentage, ranging from 12.78% to 15.23%. For Bloc Québécois, the forecasted results sit round 3.4%, for Green Party, the forecasted results vary but is almost always close but below 10%, at last for the People’s party of Canada, the votes fluctuates around 1.6% and 1.7%.\
+
+All of our results value are within logical ranges and can be interpreted. For example, our forecasting model suggests that in the province of Ontario, the liberal party received 34.11% of votes.
+
+## Conclusions
+Across the provinces, we observe on average, that 34.174% voted for the Liberal party, 36.11% voted for the Conservative party, 13.696% voted for the NDP, 3.474% voted for the Bloc Quebecois, 9.132% voted for the Green party, and 1.699% voted for the People’s party of Canada. Comparing this to the actual overall votes percentage in 2019, where 33.1% voted for the Liberal party, 34.3% voted for the Conservative party, 16% voted for the NDP, 7.6% voted for the Bloc Quebecois, 6.5% voted for the Green party, and 1.699% voted for the People’s party of Canada(Heard, n.d.).\
+
+We see small differences among the lesser voted parties, but very similar data for both Liberal and Conservative party. If we look at graph 1, we do see that votes for Liberal and Conservatives takes up a lot of the survey responses, thus after reweighting by post-stratification, the votes forecasted for these two parties will be more accurate.  Overall, results from our model successfully captures the overall trend of this election.\
+
+Our original hypothesis stated that our forecasted results should correspond to the actual results in 2019.While our results are somewhat promising and contains explainable values, our forecasted results by province do not match the actual data by province. For example, Bloc Quebecois, a Quebec based political party actually received over 32% of votes in the province of Quebec but 0% of votes else were(Elections Canada, 2019). However our model forecasts around 3.4% votes for Bloc Quebecois for all provinces. This raises a flag about the interpretabality by province. The cause of this is simple, because we are utilizing post-stratification by re-weighting according to demographic data of each province, we are leaving out the province data during our first stage models. In other words, our original logistic model neglects the effect of provinces on voting in-order to later perform post-stratification with provinces as groups. This is a drawback on the interpretability aspect of our model, meaning we should interpret with care. Regardless, our results by provinces still provides very useful insights on the election outcomes.\
+
+We conclude we can extend our model to forecast other elections, with potential future steps such as using more data sets, finding more overlapping variable to perform post-stratification on or applying more models in hopes of achieveing more accurate estimates.
+
+
+
+\newpage
+## Bibliography APA style
+
+Lusinchi, D. (2012). "president" Landon and the 1936 literary digest poll: Were automobile and telephone owners to blame? Social Science History, 36(1), 23–54. https://doi.org/10.1215/01455532-1461650 \
+
+Government of Canada, Statistics Canada. (2019, February 6). General Social Survey - Family (GSS). Surveys and statistical programs. Retrieved November 24, 2022, from https://www23.statcan.gc.ca/imdb/p2SV.pl?Function=getSurvey&SDDS=4501 \
+
+Elections Canada. (2019). Forty-third general election 2019. Official Voting Results. Retrieved November 26, 2022, from https://www.elections.ca/res/rep/off/ovr2019app/51/table9E.html \
+
+Holtz, Y. (n.d.). Density Chart with several groups. – the R Graph Gallery. Retrieved November 26, 2022, from https://r-graph-gallery.com/135-stacked-density-graph.html \
+
+Heard, A. (n.d.). Canadian election results by party 1867 to 2021. Canadian Election Results: 1867-2021. Retrieved November 26, 2022, from https://www.sfu.ca/~aheard/elections/1867-present.html \
+
+Schwartz, M. (2021, August 26). How Canada's Electoral System Works. CIC News. Retrieved November 26, 2022, from https://www.cicnews.com/2021/08/how-canadas-electoral-system-works-0819016.html#gs.jsq4vu \
+
+Stephenson, L. B., Harell, A., Rubenson, D., &amp; Loewen, P. J. (2022, March 21). 2019 Canadian Election Study (CES) - phone survey. Harvard Dataverse. Retrieved November 29, 2022, from https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi%3A10.7910%2FDVN%2F8RHLG1&amp;version=1.1 
+
+\newpage
+## Appendix
+Due to the large number of models we use, the six models summery in the "Method" section are placed here.
+```{r, echo = FALSE}
+
+# Here you can include some relevant visualizations.
+summary(logit_model1)
+summary(logit_model2)
+summary(logit_model3)
+summary(logit_model4)
+summary(logit_model5)
+summary(logit_model6)
+
+```
